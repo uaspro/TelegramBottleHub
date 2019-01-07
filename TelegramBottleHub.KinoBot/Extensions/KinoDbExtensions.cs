@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Telegram.Bot.Types;
 using TelegramBottleHub.Db.Core.Managers;
+using TelegramBottleHub.General.Helpers;
 using TelegramBottleHub.KinoBot.Models;
 using TelegramBottleHub.KinoBot.Parsers.Core.Models;
 
@@ -17,7 +18,6 @@ namespace TelegramBottleHub.KinoBot.Extensions
 
         public static async Task<KinosCheck> GetLastKinosSync(this MongoDbManager mongoDbManager)
         {
-            var now = DateTime.UtcNow;
             var kinosSyncCollection = mongoDbManager.Database.GetCollection<KinosCheck>(KinosSyncDbCollectionName);
             var lastKinosSync = await kinosSyncCollection.Find(Builders<KinosCheck>.Filter.Empty)
                 .Sort(Builders<KinosCheck>.Sort.Descending(nameof(KinosCheck.SyncDate)))
@@ -28,7 +28,7 @@ namespace TelegramBottleHub.KinoBot.Extensions
 
         public static async Task InsertKinosCheck(this MongoDbManager mongoDbManager, int newComingSoonKinos, int newRunningKinosCount)
         {
-            var now = DateTime.UtcNow;
+            var now = TimeHelper.GetNow();
             var kinosSyncCollection = mongoDbManager.Database.GetCollection<KinosCheck>(KinosSyncDbCollectionName);
             await kinosSyncCollection.InsertOneAsync(new KinosCheck
             {
@@ -84,10 +84,26 @@ namespace TelegramBottleHub.KinoBot.Extensions
             return !isSubscribed;
         }
 
+        private static FilterDefinition<Kino> GetRunningKinosByStateFilter(Kino.KinoState kinoState)
+        {
+            var now = TimeHelper.GetNow();
+            var stateFilter = Builders<Kino>.Filter.Eq(nameof(Kino.State), kinoState);
+            if (kinoState == Kino.KinoState.ComingSoon)
+            {
+                return stateFilter;
+            }
+
+            return Builders<Kino>.Filter.And(
+                    stateFilter,
+                    Builders<Kino>.Filter.Or(
+                        Builders<Kino>.Filter.Eq(nameof(Kino.StartRunningDate), (DateTime?)null),
+                        Builders<Kino>.Filter.Lt(nameof(Kino.StartRunningDate), now)));
+        }
+
         public static async Task<long> GetDbKinosByStateTotalCount(this MongoDbManager mongoDbManager, Kino.KinoState kinoState)
         {
             var kinosCollection = mongoDbManager.Database.GetCollection<Kino>(KinosDbCollectionName);
-            var kinosCount = await kinosCollection.CountDocumentsAsync(Builders<Kino>.Filter.Eq(nameof(Kino.State), kinoState));
+            var kinosCount = await kinosCollection.CountDocumentsAsync(GetRunningKinosByStateFilter(kinoState));
 
             return kinosCount;
         }
@@ -95,7 +111,8 @@ namespace TelegramBottleHub.KinoBot.Extensions
         public static async Task<IList<Kino>> GetDbKinosByState(this MongoDbManager mongoDbManager, Kino.KinoState kinoState, int? skip = null, int? limit = null)
         {
             var kinosCollection = mongoDbManager.Database.GetCollection<Kino>(KinosDbCollectionName);
-            var kinos = await kinosCollection.Find(Builders<Kino>.Filter.Eq(nameof(Kino.State), kinoState))
+            var kinos = await kinosCollection.Find(GetRunningKinosByStateFilter(kinoState))
+                .Sort(Builders<Kino>.Sort.Ascending(nameof(Kino.StartRunningDate)))
                 .Skip(skip)
                 .Limit(limit)
                 .ToListAsync();
@@ -122,9 +139,12 @@ namespace TelegramBottleHub.KinoBot.Extensions
                 {
                     await kinosCollection.InsertOneAsync(kino);
                 }
-                else if(kino.State > kinoDb.State)
-                {                    
-                    await mongoDbManager.SetKinoState(kino, kino.State);
+                else
+                {
+                    kino.Id = kinoDb.Id;
+                    kino.State = kino.State > kinoDb.State ? kino.State : kinoDb.State;
+
+                    await kinosCollection.ReplaceOneAsync(Builders<Kino>.Filter.Eq(nameof(Kino.ExternalCode), kino.ExternalCode), kino);
                 }
             }
         }

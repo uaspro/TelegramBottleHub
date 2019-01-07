@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading;
+using TelegramBottleHub.General.Helpers;
 using TelegramBottleHub.KinoBot.Parsers.Core.Models;
 
 namespace TelegramBottleHub.KinoBot.Parsers.PlanetaKino
@@ -15,6 +16,7 @@ namespace TelegramBottleHub.KinoBot.Parsers.PlanetaKino
         private const string BaseUrl = "https://planetakino.ua";
         private const string MoviesPart = "/movies";
         private const string ShowtimesPart = "/showtimes";
+        private const string MoviesMonthPart = "#movies_month";
 
         private const int RequestsMinIntervalMilliseconds = 500;
 
@@ -142,7 +144,7 @@ namespace TelegramBottleHub.KinoBot.Parsers.PlanetaKino
                     var kino = new Kino
                     {
                         ExternalCode = movieExternalCode,
-                        State = Kino.KinoState.Running
+                        State = Kino.KinoState.RunningOrSelling
                     };
 
                     result.Add(kino);
@@ -184,31 +186,140 @@ namespace TelegramBottleHub.KinoBot.Parsers.PlanetaKino
 
             foreach (var kino in kinos)
             {
-                var htmlDocument = htmlWeb.Load(kino.Url);
+                var htmlDocument = htmlWeb.Load(kino.Url + MoviesMonthPart);
 
                 Thread.Sleep(RequestsMinIntervalMilliseconds);
 
-                var posterHeaderNode = htmlDocument.DocumentNode.Descendants()
+                ParsePosterData(htmlDocument, kino);
+                ParseKinoSchedule(htmlDocument, kino);
+            }
+        }
+
+        private static void ParsePosterData(HtmlDocument htmlDocument, Kino kino)
+        {
+            var posterHeaderNode = htmlDocument.DocumentNode.Descendants()
                     .FirstOrDefault(c => c.Name == "header" && c.Attributes.Any(a => a.Name == "class" && a.Value == "movie-poster-block"));
-                if(posterHeaderNode == null)
+            if (posterHeaderNode == null)
+            {
+                return;
+            }
+
+            var posterUrl = posterHeaderNode.Attributes.FirstOrDefault(a => a.Name == "data-mobile")?.Value;
+            if (!string.IsNullOrWhiteSpace(posterUrl))
+            {
+                kino.ImageUrl = BaseUrl + posterUrl;
+            }
+
+            var trailerFrame = posterHeaderNode.Descendants()
+                .FirstOrDefault(c => c.Name == "iframe" && c.Attributes.Any(a => a.Name == "id" && a.Value == "ytplayer"));
+            var trailerUrlRaw = trailerFrame?.Attributes.FirstOrDefault(a => a.Name == "src")?.Value;
+            if (!string.IsNullOrWhiteSpace(trailerUrlRaw))
+            {
+                trailerUrlRaw = trailerUrlRaw.Trim().Replace("https://www.youtube.com/embed/", "https://www.youtube.com/watch?v=");
+                kino.TrailerUrl = trailerUrlRaw.Substring(0, trailerUrlRaw.LastIndexOf('?'));
+            }
+        }
+
+        private static void ParseKinoSchedule(HtmlDocument htmlDocument, Kino kino)
+        {
+            var now = TimeHelper.GetNow();
+            var showtimeRows = htmlDocument.DocumentNode.SelectNodes("//div[@class=\"showtime-movie-container\"]/div[contains(@class, \"showtimes-row\")]");
+            if(showtimeRows == null)
+            {
+                return;
+            }
+
+            foreach(var showtimeRow in showtimeRows)
+            {
+                var showtimeDayText = showtimeRow.Descendants()
+                    .FirstOrDefault(c => c.Name == "span" && c.Attributes.Any(a => a.Name == "class" && a.Value.Contains("date")))?.InnerText.Trim().Split(' ')[0];
+                int showtimeDayNumber;
+                if(!int.TryParse(showtimeDayText, out showtimeDayNumber))
                 {
                     continue;
                 }
 
-                var posterUrl = posterHeaderNode.Attributes.FirstOrDefault(a => a.Name == "data-mobile")?.Value;
-                if(!string.IsNullOrWhiteSpace(posterUrl))
+                var currentDayNumber = now.Day;
+                var showtimeMonthDateTime = showtimeDayNumber < currentDayNumber ? now.AddMonths(1) : now;
+                var showtimeDate = new DateTime(showtimeMonthDateTime.Year, showtimeMonthDateTime.Month, showtimeDayNumber).Date;
+                var showtimeDay = new ShowtimeDay(showtimeDate);
+
+                var showtimeScheduleRows = showtimeRow.Descendants()
+                    .Where(c => c.Name == "div" && c.Attributes.Any(a => a.Name == "class" && a.Value.Contains("showtimes-line-technology")));
+                foreach(var showtimeScheduleRow in showtimeScheduleRows)
                 {
-                    kino.ImageUrl = BaseUrl + posterUrl;
+                    var technologyTitle = showtimeScheduleRow.Descendants()
+                        .FirstOrDefault(c => c.Name == "div" && c.Attributes.Any(a => a.Name == "class" && a.Value.Contains("showtimes-line-technology-title")))?.InnerText.Trim();
+                    if(string.IsNullOrWhiteSpace(technologyTitle))
+                    {
+                        continue;
+                    }
+
+                    var technologyAndFormat = technologyTitle.Split(',');
+                    if(technologyAndFormat.Length < 2)
+                    {
+                        continue;
+                    }
+
+                    var technology = ParseTechnology(technologyAndFormat[0]);
+                    var format = ParseFormat(technologyAndFormat[1]);
+                    var scheduleTimes = showtimeScheduleRow.Descendants()
+                        .Where(c => c.Name == "a" && c.Attributes.Any(a => a.Name == "class" && a.Value.Contains("time")));
+                    foreach(var scheduleTime in scheduleTimes)
+                    {
+                        TimeSpan timeSpan;
+                        if(!TimeSpan.TryParse(scheduleTime.InnerText.Trim(), out timeSpan))
+                        {
+                            continue;
+                        }
+
+                        var buyUrl = scheduleTime.Attributes.FirstOrDefault(a => a.Name == "href")?.Value;
+                        showtimeDay.Schedule.Add(new ShowtimeSchedule
+                        {
+                            Time = timeSpan,
+                            Technology = technology,
+                            Format = format,
+                            BuyUrl = buyUrl
+                        });
+                    }
                 }
 
-                var trailerFrame = posterHeaderNode.Descendants()
-                    .FirstOrDefault(c => c.Name == "iframe" && c.Attributes.Any(a => a.Name == "id" && a.Value == "ytplayer"));
-                var trailerUrlRaw = trailerFrame?.Attributes.FirstOrDefault(a => a.Name == "src")?.Value;
-                if (!string.IsNullOrWhiteSpace(trailerUrlRaw))
+                if(showtimeDay.Schedule.Any())
                 {
-                    trailerUrlRaw = trailerUrlRaw.Trim().Replace("https://www.youtube.com/embed/", "https://www.youtube.com/watch?v=");
-                    kino.TrailerUrl = trailerUrlRaw.Substring(0, trailerUrlRaw.LastIndexOf('?'));
+                    kino.ShowtimeDays.Add(showtimeDay);
                 }
+            }
+        }
+
+        private static ShowtimeSchedule.KinoTechnology ParseTechnology(string technology)
+        {
+            technology = technology.Trim().ToLowerInvariant();
+
+            switch (technology)
+            {
+                case "cinetech+":
+                    return ShowtimeSchedule.KinoTechnology.CinetechPlus;
+                case "imax":
+                    return ShowtimeSchedule.KinoTechnology.CinetechPlus;
+                case "4dx":
+                    return ShowtimeSchedule.KinoTechnology.CinetechPlus;
+                default:
+                    return ShowtimeSchedule.KinoTechnology.Undefined;
+            }
+        }
+
+        private static ShowtimeSchedule.KinoFormat ParseFormat(string format)
+        {
+            format = format.Trim().ToLowerInvariant();
+
+            switch (format)
+            {
+                case "2d":
+                    return ShowtimeSchedule.KinoFormat._2d;
+                case "3d":
+                    return ShowtimeSchedule.KinoFormat._3d;
+                default:
+                    return ShowtimeSchedule.KinoFormat.Undefined;
             }
         }
     }

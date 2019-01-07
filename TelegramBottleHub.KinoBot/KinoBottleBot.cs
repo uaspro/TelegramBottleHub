@@ -61,7 +61,7 @@ namespace TelegramBottleHub.KinoBot
                 {
                     new[]
                     {
-                        BotHelper.GetInlineCallbackButton("📽️ Фільми, що зараз у прокаті", GetKinosListActionKey, Kino.KinoState.Running.ToString())
+                        BotHelper.GetInlineCallbackButton("📽️ Фільми, що зараз у прокаті", GetKinosListActionKey, Kino.KinoState.RunningOrSelling.ToString())
                     },
                     new[]
                     {
@@ -262,7 +262,7 @@ namespace TelegramBottleHub.KinoBot
                         (skip + DefaultKinosPageLimit).ToString()));
             }
 
-            if(kinoState == Kino.KinoState.Running)
+            if(kinoState == Kino.KinoState.RunningOrSelling)
             {
                 var isSubscribed = await MongoDbManager.GetUserIsSubscribed(callbackEventMetadata.From);
                 if (!isSubscribed)

@@ -1,6 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using System;
+using System.Collections.Generic;
 
 namespace TelegramBottleHub.KinoBot.Parsers.Core.Models
 {
@@ -22,6 +23,8 @@ namespace TelegramBottleHub.KinoBot.Parsers.Core.Models
         public DateTime? StartRunningDate { get; set; }
 
         public KinoState State { get; set; }
+        
+        public List<ShowtimeDay> ShowtimeDays { get; set; } = new List<ShowtimeDay>();
 
         public override bool Equals(object obj)
         {
@@ -39,7 +42,7 @@ namespace TelegramBottleHub.KinoBot.Parsers.Core.Models
         {
             Undefined,
             ComingSoon,
-            Running,
+            RunningOrSelling,
             StoppedRunning
         }
     }

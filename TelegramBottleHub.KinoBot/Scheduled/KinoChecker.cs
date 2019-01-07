@@ -7,6 +7,7 @@ using Telegram.Bot;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramBottleHub.Core.Helpers;
 using TelegramBottleHub.Db.Core.Managers;
+using TelegramBottleHub.General.Helpers;
 using TelegramBottleHub.KinoBot.Extensions;
 using TelegramBottleHub.KinoBot.Parsers.Core.Models;
 using TelegramBottleHub.KinoBot.Parsers.PlanetaKino;
@@ -26,7 +27,7 @@ namespace TelegramBottleHub.KinoBot.Scheduled
                 {
                     try
                     {
-                        var now = DateTime.UtcNow;
+                        var now = TimeHelper.GetNow();
                         var kinosSync = await mongoDbManager.GetLastKinosSync();
                         if (kinosSync == null || (now - kinosSync.SyncDate).TotalMinutes > SyncIntervalMinutes)
                         {
@@ -77,27 +78,27 @@ namespace TelegramBottleHub.KinoBot.Scheduled
 
         private static async Task<IList<Kino>> GetRunningKinos(MongoDbManager mongoDbManager)
         {
-            IList<Kino> kinosToInsert = null;
+            IList<Kino> newKinos = null;
             try
             {
                 var todayKinos = PlanetaKinoParser.ParseTodayKinos();
-                var dbKinos = await mongoDbManager.GetDbKinosByState(Kino.KinoState.Running);
+                await mongoDbManager.InsertOrUpdateKinos(todayKinos);
 
-                kinosToInsert = todayKinos.Except(dbKinos).ToList();
-                await mongoDbManager.InsertOrUpdateKinos(kinosToInsert);
-
+                var dbKinos = await mongoDbManager.GetDbKinosByState(Kino.KinoState.RunningOrSelling);
                 var kinosStoppedRunning = dbKinos.Except(todayKinos).ToList();
                 foreach (var kino in kinosStoppedRunning)
                 {
                     await mongoDbManager.SetKinoState(kino, Kino.KinoState.StoppedRunning);
                 }
+
+                newKinos = todayKinos.Except(dbKinos).ToList();
             }
             catch (Exception)
             {
                 // ignored
             }
 
-            return kinosToInsert;
+            return newKinos;
         }
 
         private static async Task NotifySubscribers(IList<Kino> newKinos, MongoDbManager mongoDbManager, TelegramBotClient botClient)
@@ -116,7 +117,7 @@ namespace TelegramBottleHub.KinoBot.Scheduled
                             {
                                 new[]
                                 {
-                                    BotHelper.GetInlineCallbackButton("Переглянути", KinoBottleBot.GetKinosListActionKey, Kino.KinoState.Running.ToString())
+                                    BotHelper.GetInlineCallbackButton("Переглянути", KinoBottleBot.GetKinosListActionKey, Kino.KinoState.RunningOrSelling.ToString())
                                 }
                             }));
                     }
