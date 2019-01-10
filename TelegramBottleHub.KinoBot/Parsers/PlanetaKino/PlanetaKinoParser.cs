@@ -300,9 +300,9 @@ namespace TelegramBottleHub.KinoBot.Parsers.PlanetaKino
                 case "cinetech+":
                     return ShowtimeSchedule.KinoTechnology.CinetechPlus;
                 case "imax":
-                    return ShowtimeSchedule.KinoTechnology.CinetechPlus;
+                    return ShowtimeSchedule.KinoTechnology.Imax;
                 case "4dx":
-                    return ShowtimeSchedule.KinoTechnology.CinetechPlus;
+                    return ShowtimeSchedule.KinoTechnology._4dx;
                 default:
                     return ShowtimeSchedule.KinoTechnology.Undefined;
             }
